@@ -1,7 +1,8 @@
-from ultralytics import YOLO
-from utils import warp_image, get_board_corners
-import numpy as np
 import cv2
+import numpy as np
+from ultralytics import YOLO
+from pydantic import BaseModel
+from typing import List
 
 model = YOLO("chess_model/best.pt")
 
@@ -13,6 +14,36 @@ fen_map = {
     "white-knight": "N", "black-knight": "n",
     "white-pawn": "P", "black-pawn": "p",
 }
+
+class Detection(BaseModel):
+    class_: str
+    bbox: List[float]
+
+def detect_board_corners(image):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    corners = cv2.goodFeaturesToTrack(gray, maxCorners=4, qualityLevel=0.01, minDistance=50)
+    if corners is None or len(corners) < 4:
+        return None
+    corners = np.int0(corners).reshape(-1, 2)
+    s = corners.sum(axis=1)
+    diff = np.diff(corners, axis=1)
+
+    rect = np.zeros((4, 2), dtype="float32")
+    rect[0] = corners[np.argmin(s)]       # top-left
+    rect[2] = corners[np.argmax(s)]       # bottom-right
+    rect[1] = corners[np.argmin(diff)]    # top-right
+    rect[3] = corners[np.argmax(diff)]    # bottom-left
+    return rect
+
+def warp_board(image, corners, size=416):
+    dst = np.array([
+        [0, 0],
+        [size - 1, 0],
+        [size - 1, size - 1],
+        [0, size - 1]
+    ], dtype="float32")
+    M = cv2.getPerspectiveTransform(corners, dst)
+    return cv2.warpPerspective(image, M, (size, size))
 
 def filter_detections(results, square_size=52):
     filtered = {}
@@ -31,15 +62,26 @@ def filter_detections(results, square_size=52):
 
         if key not in filtered or conf > filtered[key][2]:
             filtered[key] = (cls_id, x, conf)
-
     return filtered
 
-
-def build_fen(filtered_dets):
+def detections_to_fen(boxes, names, image_size=416):
     board = [["" for _ in range(8)] for _ in range(8)]
-    for (row, col), (cls_id, _, _) in filtered_dets.items():
-        label = model.names[cls_id]
-        piece = fen_map.get(label, "")
+    square_size = image_size / 8
+
+    if boxes is None or boxes.data is None:
+        return "8/8/8/8/8/8/8/8 w KQkq - 0 1"
+
+    for box, cls_id in zip(boxes.xywh, boxes.cls):
+        x_center, y_center, w, h = box.tolist()
+        col = int(x_center // square_size)
+        row = int(y_center // square_size)
+
+        # Clamp to board
+        col = min(max(col, 0), 7)
+        row = min(max(row, 0), 7)
+
+        class_name = names[int(cls_id.item())]
+        piece = fen_map.get(class_name)
         if piece:
             board[row][col] = piece
 
@@ -47,23 +89,27 @@ def build_fen(filtered_dets):
     for row in board:
         fen_row = ""
         empty = 0
-        for sq in row:
-            if sq == "":
+        for square in row:
+            if square == "":
                 empty += 1
             else:
                 if empty:
                     fen_row += str(empty)
                     empty = 0
-                fen_row += sq
+                fen_row += square
         if empty:
             fen_row += str(empty)
         fen_rows.append(fen_row)
-    return "/".join(fen_rows) + " w KQkq - 0 1"
 
-def detect_fen_from_image(pil_image):
-    img = np.array(pil_image)
-    corners = get_board_corners(img) 
-    warped = warp_image(img, corners)
-    results = model(warped)[0]
-    filtered = filter_detections(results)
-    return build_fen(filtered)
+    return f"{'/'.join(fen_rows)} w KQkq - 0 1"
+
+def detect_and_annotate(image, return_fen=False):
+    results = model(image)
+    result = results[0]
+    annotated_image = result.plot()
+
+    if return_fen:
+        fen = detections_to_fen(result.boxes, result.names, image.shape[0])
+        return annotated_image, fen
+
+    return annotated_image

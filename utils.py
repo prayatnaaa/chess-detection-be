@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+from ultralytics import YOLO
 
 def warp_image(img, src_points, dst_size=416):
     dst_points = np.float32([
@@ -19,35 +20,23 @@ def get_default_board_corners(img):
     ]
 
 def get_board_corners(img):
-    h, w = img.shape[:2]
+    # Gunakan YOLO untuk deteksi papan
+    yolo_model = YOLO("chess_model/best.pt")
+    result = yolo_model(img)[0]
 
-    # 1. Preprocessing: Grayscale & Blur
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    for box in result.boxes:
+        cls_id = int(box.cls[0])
+        label = yolo_model.names[cls_id]
+        if label == "board":  # pastikan label ini sesuai label di model
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            return [
+                [x1, y1],
+                [x2, y1],
+                [x2, y2],
+                [x1, y2]
+            ]
+    
+    # fallback jika papan tidak terdeteksi
+    print("Default board fallback")
+    return get_default_board_corners(img)
 
-    # 2. Thresholding (lebih stabil dari Canny untuk kasus ini)
-    _, thresh = cv2.threshold(blur, 120, 255, cv2.THRESH_BINARY_INV)
-
-    # 3. Cari kontur
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return get_default_board_corners(img)
-
-    # 4. Filter kontur kecil
-    min_area = h * w * 0.2  # hanya kontur besar
-    contours = [cnt for cnt in contours if cv2.contourArea(cnt) > min_area]
-    if not contours:
-        print("default border")
-        return get_default_board_corners(img)
-
-    # 5. Ambil kontur terbesar
-    largest_contour = max(contours, key=cv2.contourArea)
-
-    # 6. Gunakan bounding box dari kontur terbesar
-    x, y, w_box, h_box = cv2.boundingRect(largest_contour)
-    return [
-        [x, y],
-        [x + w_box, y],
-        [x + w_box, y + h_box],
-        [x, y + h_box]
-    ]
