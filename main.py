@@ -13,6 +13,9 @@ from ultralytics import YOLO
 from detector import detections_to_fen
 import asyncio
 from uuid import uuid4
+import base64
+import cv2
+import json
 
 app = FastAPI()
 model = YOLO("chess_model/best.pt")
@@ -50,16 +53,26 @@ async def stream_fen(session_id: str):
 
             results = model(frame)[0]
             if results.boxes is None or len(results.boxes) == 0:
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.1)
                 continue
 
-            fen = detections_to_fen(results.boxes, results.names, image_size=frame.shape[0])
-            if fen != last_fen:
-                fen_history.append(fen)
-                last_fen = fen
-                yield {"event": "fen_update", "data": fen}
+            # Draw annotations
+            annotated_frame, fen = detect_and_annotate(frame, return_fen=True)
 
-            await asyncio.sleep(0.01)
+            if fen != last_fen:
+                last_fen = fen
+                fen_history.append(fen)
+
+                # Encode frame as base64 string
+                _, buffer = cv2.imencode(".jpg", annotated_frame)
+                jpg_as_text = base64.b64encode(buffer).decode("utf-8")
+
+                yield {
+                    "event": "fen_update",
+                    "data": json.dumps({"fen": fen, "frame": jpg_as_text}),
+                }
+
+            await asyncio.sleep(0.1)
 
         cap.release()
         yield {"event": "end", "data": "done"}
@@ -124,7 +137,9 @@ async def upload_video(file: UploadFile = File(...)):
         if results.boxes is None or len(results.boxes) == 0:
             continue
 
-        fen = detections_to_fen(results.boxes, results.names, image_size=frame.shape[0])
+        height, width = frame.shape[:2]
+        fen = detections_to_fen(results.boxes, results.names, frame_width=width, frame_height=height)
+
         if fen != last_fen:
             fen_history.append(fen)
 

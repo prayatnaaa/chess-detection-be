@@ -64,21 +64,25 @@ def filter_detections(results, square_size=52):
             filtered[key] = (cls_id, x, conf)
     return filtered
 
-def detections_to_fen(boxes, names, image_size=416):
+def detections_to_fen(boxes, names, image_size=416, frame_width=416, frame_height=416):
     board = [["" for _ in range(8)] for _ in range(8)]
-    square_size = image_size / 8
+    square_w = frame_width / 8
+    square_h = frame_height / 8
 
     if boxes is None or boxes.data is None:
         return "8/8/8/8/8/8/8/8 w KQkq - 0 1"
 
     for box, cls_id in zip(boxes.xywh, boxes.cls):
         x_center, y_center, w, h = box.tolist()
-        col = int(x_center // square_size)
-        row = int(y_center // square_size)
+
+        col = int(x_center // square_w)
+        row = int(y_center // square_h)
 
         # Clamp to board
         col = min(max(col, 0), 7)
         row = min(max(row, 0), 7)
+
+        # row = 7 - row  
 
         class_name = names[int(cls_id.item())]
         piece = fen_map.get(class_name)
@@ -103,13 +107,19 @@ def detections_to_fen(boxes, names, image_size=416):
 
     return f"{'/'.join(fen_rows)} w KQkq - 0 1"
 
-def detect_and_annotate(image, return_fen=False):
-    results = model(image)
-    result = results[0]
+def detect_and_annotate(frame, return_fen=False):
+    results = model(frame)[0]
+    
+    annotated_frame = frame.copy()
+    if results.boxes is not None and len(results.boxes) > 0:
+        for box in results.boxes.xyxy:
+            x1, y1, x2, y2 = map(int, box)
+            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-    detections = result.boxes
-    fen = detections_to_fen(detections, result.names, image.shape[0])
-
+    fen = ""
     if return_fen:
-        return image, fen
-    return image
+        height, width = frame.shape[:2]
+        fen = detections_to_fen(results.boxes, results.names, frame_width=width, frame_height=height)
+
+    return annotated_frame, fen
+
