@@ -106,10 +106,10 @@ def detections_to_fen(boxes, names, image_size=416):
 def detect_and_annotate(image, return_fen=False):
     results = model(image)
     result = results[0]
-    annotated_image = result.plot()
+
+    detections = result.boxes
+    fen = detections_to_fen(detections, result.names, image.shape[0])
 
     if return_fen:
-        fen = detections_to_fen(result.boxes, result.names, image.shape[0])
-        return annotated_image, fen
-
-    return annotated_image
+        return image, fen
+    return image
